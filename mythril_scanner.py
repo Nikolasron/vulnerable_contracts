@@ -8,10 +8,13 @@ from tronpy import Tron
 # --- CONFIG ---
 TRONSCAN_API_KEY = os.getenv("TRONSCAN_API_KEY", "").strip()
 OUTPUT_FILE = "vulnerable_contracts.json"
-CONTRACT_LIMIT = 20  # Number of contracts to scan per run
+CONTRACT_LIMIT = 20 
 
 TRONSCAN_LIST_URL = "https://apilist.tronscanapi.com/api/contracts"
 TRONSCAN_DETAIL_URL = "https://apilist.tronscanapi.com/api/contract"
+TRONSCAN_BYTECODE_URL = "https://apilist.tronscanapi.com/api/contract/bytecode"
+TRONGRID_BASE = "https://api.trongrid.io"
+
 HEADERS = {}
 if TRONSCAN_API_KEY: 
     HEADERS["TRON-PRO-API-KEY"] = TRONSCAN_API_KEY
@@ -20,14 +23,9 @@ client = Tron(network="mainnet")
 RISK_SWC = {"SWC-105", "SWC-106", "SWC-115"}
 
 def fetch_recent_contracts(limit=CONTRACT_LIMIT):
-    """Fetches OLDER verified contracts to ensure they have bytecode."""
     params = {
-        "count": "true", 
-        "limit": limit, 
-        "start": 0,
-        "sort": "timestamp",          # Changed: Removed the minus sign to get OLDEST contracts first
-        "verified-only": "true", 
-        "open-source-only": "true",   # Changed: Forces API to only return contracts with open source code
+        "count": "true", "limit": limit, "start": 0,
+        "sort": "timestamp", "verified-only": "true", "open-source-only": "true",
     }
     try:
         r = requests.get(TRONSCAN_LIST_URL, headers=HEADERS, params=params, timeout=15)
@@ -40,30 +38,43 @@ def fetch_recent_contracts(limit=CONTRACT_LIMIT):
         return []
 
 def get_bytecode(address):
-    """Fetches bytecode using tronpy, with fallback to TronScan API."""
-    # 1. Try TronPy (Most reliable for TVM)
+    """Fetches bytecode using 3 different fallback methods."""
+    
+    # Method 1: TronScan Specific Bytecode Endpoint (Most reliable)
     try:
-        contract = client.get_contract(address)
-        if contract and contract.get("bytecode"):
-            return contract.get("bytecode")
+        r = requests.get(TRONSCAN_BYTECODE_URL, headers=HEADERS, params={"contract": address}, timeout=15)
+        if r.ok:
+            data = r.json()
+            if isinstance(data, dict) and data.get("bytecode"):
+                return data["bytecode"]
     except Exception:
         pass
 
-    # 2. Fallback to TronScan API
+    # Method 2: Native TronGrid API
+    try:
+        url = f"{TRONGRID_BASE}/wallet/getcontract"
+        r = requests.post(url, json={"value": address, "visible": True}, headers=HEADERS, timeout=15)
+        if r.ok:
+            bytecode = r.json().get("bytecode")
+            if bytecode: 
+                return bytecode
+    except Exception:
+        pass
+
+    # Method 3: TronScan Detail Endpoint
     try:
         r = requests.get(TRONSCAN_DETAIL_URL, headers=HEADERS, params={"contract": address}, timeout=15)
         if r.ok:
             data = r.json().get("data", [{}])[0]
-            # Check multiple possible fields for bytecode
             bytecode = data.get("bytecode") or data.get("runtime_bytecode")
-            if bytecode:
+            if bytecode: 
                 return bytecode
     except Exception:
         pass
+
     return None
 
 def analyze_with_mythril(bytecode):
-    """Runs Mythril on bytecode and returns JSON findings."""
     if not bytecode: return []
     
     cmd = [
@@ -73,15 +84,12 @@ def analyze_with_mythril(bytecode):
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         if result.returncode != 0:
-            print(f"  ⚠️ Mythril error: {result.stderr}")
             return []
         return json.loads(result.stdout)
-    except Exception as e:
-        print(f"  ⚠️ Analysis failed: {e}")
+    except Exception:
         return []
 
 def is_vulnerable(mythril_results):
-    """Returns True if Mythril found a relevant SWC."""
     if not mythril_results: return False
     for issue in mythril_results:
         for problem in issue.get("issues", []):
@@ -102,9 +110,7 @@ def main():
     except FileNotFoundError: pass
 
     contracts = fetch_recent_contracts()
-
-    if len(contracts) == 0:
-        print("⚠️ No contracts to analyze.")
+    if not contracts:
         return
 
     for i, c in enumerate(contracts):
@@ -116,7 +122,7 @@ def main():
         
         bytecode = get_bytecode(address)
         if not bytecode:
-            print("  ⚠️ No bytecode, skipping.")
+            print("  ⚠️ No bytecode found after all fallbacks, skipping.")
             continue
 
         print("  🛠️ Running Mythril...")
@@ -144,6 +150,8 @@ def main():
             data[address] = record
             with open(OUTPUT_FILE, "w") as f: json.dump(data, f, indent=2)
             print(f"  ✅ Saved to {OUTPUT_FILE}")
+        else:
+            print("  ✅ No critical vulnerabilities found.")
         
         seen.add(address)
         time.sleep(2)
