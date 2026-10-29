@@ -42,7 +42,6 @@ def get_bytecode(address):
     
     # Method 1: eth_getCode via JSON-RPC (Most reliable for runtime code)
     try:
-        # Convert Base58 address to 20-byte hex (without 0x41 prefix)
         hex_addr = to_hex_address(address)
         if hex_addr.startswith("41"):
             hex_addr = "0x" + hex_addr[2:]
@@ -58,8 +57,8 @@ def get_bytecode(address):
             code = r.json().get("result")
             if code and code != "0x" and len(code) > 20:
                 return code
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  [Debug] eth_getCode failed: {e}")
 
     # Method 2: /wallet/getcontractinfo (Returns runtimecode)
     try:
@@ -70,8 +69,8 @@ def get_bytecode(address):
             bytecode = data.get("runtimecode") or data.get("bytecode")
             if bytecode: 
                 return bytecode
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  [Debug] getcontractinfo failed: {e}")
 
     # Method 3: Fallback to Tronscan detail API
     try:
@@ -81,8 +80,8 @@ def get_bytecode(address):
             bytecode = data.get("bytecode") or data.get("runtime_bytecode")
             if bytecode: 
                 return bytecode
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  [Debug] Tronscan API failed: {e}")
 
     return None
 
