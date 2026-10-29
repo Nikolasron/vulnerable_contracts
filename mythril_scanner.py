@@ -9,7 +9,7 @@ from tronpy.keys import to_hex_address
 # --- CONFIG ---
 TRONSCAN_API_KEY = os.getenv("TRONSCAN_API_KEY", "").strip()
 OUTPUT_FILE = "vulnerable_contracts.json"
-CONTRACT_LIMIT = 20 
+CONTRACT_LIMIT = 20  # Number of active contracts to scan per run
 
 TRONSCAN_LIST_URL = "https://apilist.tronscanapi.com/api/contracts"
 TRONGRID_BASE = "https://api.trongrid.io"
@@ -23,15 +23,20 @@ client = Tron(network="mainnet")
 RISK_SWC = {"SWC-105", "SWC-106", "SWC-115"}
 
 def fetch_recent_contracts(limit=CONTRACT_LIMIT):
+    """Fetches the MOST ACTIVE verified contracts (highest TRX volume)."""
     params = {
-        "count": "true", "limit": limit, "start": 0,
-        "sort": "timestamp", "verified-only": "true", "open-source-only": "true",
+        "count": "true", 
+        "limit": limit, 
+        "start": 0,
+        "sort": "-trxCount",         # <--- CHANGED: Fetches most active contracts
+        "verified-only": "true", 
+        "open-source-only": "true", 
     }
     try:
         r = requests.get(TRONSCAN_LIST_URL, headers=HEADERS, params=params, timeout=15)
         r.raise_for_status()
         data = r.json().get("data", [])
-        print(f"📡 Fetched {len(data)} contracts from TronScan.")
+        print(f"📡 Fetched {len(data)} active contracts from TronScan.")
         return data
     except Exception as e:
         print(f"❌ Failed to fetch contracts: {e}")
@@ -57,8 +62,8 @@ def get_bytecode(address):
             code = r.json().get("result")
             if code and code != "0x" and len(code) > 20:
                 return code
-    except Exception as e:
-        print(f"  [Debug] eth_getCode failed: {e}")
+    except Exception:
+        pass
 
     # Method 2: /wallet/getcontractinfo (Returns runtimecode)
     try:
@@ -69,8 +74,8 @@ def get_bytecode(address):
             bytecode = data.get("runtimecode") or data.get("bytecode")
             if bytecode: 
                 return bytecode
-    except Exception as e:
-        print(f"  [Debug] getcontractinfo failed: {e}")
+    except Exception:
+        pass
 
     # Method 3: Fallback to Tronscan detail API
     try:
@@ -80,8 +85,8 @@ def get_bytecode(address):
             bytecode = data.get("bytecode") or data.get("runtime_bytecode")
             if bytecode: 
                 return bytecode
-    except Exception as e:
-        print(f"  [Debug] Tronscan API failed: {e}")
+    except Exception:
+        pass
 
     return None
 
@@ -105,7 +110,7 @@ def is_vulnerable(mythril_results):
     return False
 
 def main():
-    print("🔍 Starting batch Mythril scan...")
+    print("🔍 Starting batch Mythril scan on ACTIVE contracts...")
     
     if not os.path.exists(OUTPUT_FILE):
         with open(OUTPUT_FILE, "w") as f: json.dump({}, f)
