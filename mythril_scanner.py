@@ -7,35 +7,27 @@ from tronpy import Tron
 
 # --- CONFIG ---
 TRONSCAN_API_KEY = os.getenv("TRONSCAN_API_KEY", "").strip()
-TRONGRID_API_KEY = os.getenv("TRONGRID_API_KEY", "").strip()
 OUTPUT_FILE = "vulnerable_contracts.json"
-CONTRACT_LIMIT = 20  # Number of recent contracts to scan per run
+CONTRACT_LIMIT = 20  # Number of contracts to scan per run
 
 TRONSCAN_LIST_URL = "https://apilist.tronscanapi.com/api/contracts"
 TRONSCAN_DETAIL_URL = "https://apilist.tronscanapi.com/api/contract"
-TRONGRID_BASE = "https://api.trongrid.io"
-
-# Debugging: Print if the key is loaded
-if TRONSCAN_API_KEY:
-    print("✅ TRONSCAN_API_KEY is loaded successfully.")
-else:
-    print("❌ WARNING: TRONSCAN_API_KEY is missing or empty! You will likely get a 401 Unauthorized error.")
-
-# Build Headers properly (No overwriting)
 HEADERS = {}
 if TRONSCAN_API_KEY: 
     HEADERS["TRON-PRO-API-KEY"] = TRONSCAN_API_KEY
 
 client = Tron(network="mainnet")
-
-# SWC IDs that indicate access control failures
 RISK_SWC = {"SWC-105", "SWC-106", "SWC-115"}
 
 def fetch_recent_contracts(limit=CONTRACT_LIMIT):
-    """Fetches recent verified contracts from TronScan."""
+    """Fetches OLDER verified contracts to ensure they have bytecode."""
     params = {
-        "count": "true", "limit": limit, "start": 0,
-        "sort": "-timestamp", "verified-only": "true", "open-source-only": "false",
+        "count": "true", 
+        "limit": limit, 
+        "start": 0,
+        "sort": "timestamp",          # Changed: Removed the minus sign to get OLDEST contracts first
+        "verified-only": "true", 
+        "open-source-only": "true",   # Changed: Forces API to only return contracts with open source code
     }
     try:
         r = requests.get(TRONSCAN_LIST_URL, headers=HEADERS, params=params, timeout=15)
@@ -48,23 +40,26 @@ def fetch_recent_contracts(limit=CONTRACT_LIMIT):
         return []
 
 def get_bytecode(address):
-    """Fetches bytecode from TronGrid, falling back to TronScan."""
-    # Try TronGrid
-    url = f"{TRONGRID_BASE}/wallet/getcontract"
+    """Fetches bytecode using tronpy, with fallback to TronScan API."""
+    # 1. Try TronPy (Most reliable for TVM)
     try:
-        r = requests.post(url, json={"value": address, "visible": True}, headers=HEADERS, timeout=15)
-        if r.ok:
-            bytecode = r.json().get("bytecode")
-            if bytecode: return bytecode
-    except Exception: pass
+        contract = client.get_contract(address)
+        if contract and contract.get("bytecode"):
+            return contract.get("bytecode")
+    except Exception:
+        pass
 
-    # Fallback to TronScan
+    # 2. Fallback to TronScan API
     try:
         r = requests.get(TRONSCAN_DETAIL_URL, headers=HEADERS, params={"contract": address}, timeout=15)
         if r.ok:
             data = r.json().get("data", [{}])[0]
-            return data.get("bytecode")
-    except Exception: pass
+            # Check multiple possible fields for bytecode
+            bytecode = data.get("bytecode") or data.get("runtime_bytecode")
+            if bytecode:
+                return bytecode
+    except Exception:
+        pass
     return None
 
 def analyze_with_mythril(bytecode):
@@ -97,7 +92,6 @@ def is_vulnerable(mythril_results):
 def main():
     print("🔍 Starting batch Mythril scan...")
     
-    # Ensure output file exists
     if not os.path.exists(OUTPUT_FILE):
         with open(OUTPUT_FILE, "w") as f: json.dump({}, f)
 
@@ -110,7 +104,7 @@ def main():
     contracts = fetch_recent_contracts()
 
     if len(contracts) == 0:
-        print("⚠️ No contracts to analyze. Check your API key or rate limits.")
+        print("⚠️ No contracts to analyze.")
         return
 
     for i, c in enumerate(contracts):
@@ -125,6 +119,7 @@ def main():
             print("  ⚠️ No bytecode, skipping.")
             continue
 
+        print("  🛠️ Running Mythril...")
         results = analyze_with_mythril(bytecode)
         
         if is_vulnerable(results):
@@ -137,13 +132,12 @@ def main():
             
             record = {
                 "address": address, "name": name,
-                "ownerless": True,  # Flagged as ownerless due to SWC
+                "ownerless": True,
                 "mythril_vulnerable": True,
                 "mythril_issues": list(set(issues)),
                 "timestamp": int(time.time()),
             }
             
-            # Save result
             try:
                 with open(OUTPUT_FILE, "r") as f: data = json.load(f)
             except FileNotFoundError: data = {}
@@ -152,7 +146,7 @@ def main():
             print(f"  ✅ Saved to {OUTPUT_FILE}")
         
         seen.add(address)
-        time.sleep(2)  # Rate limit protection
+        time.sleep(2)
 
 if __name__ == "__main__":
     main()
