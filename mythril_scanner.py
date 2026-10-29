@@ -6,17 +6,25 @@ import subprocess
 from tronpy import Tron
 
 # --- CONFIG ---
-TRONSCAN_API_KEY = os.getenv("TRONSCAN_API_KEY", "")
-TRONGRID_API_KEY = os.getenv("TRONGRID_API_KEY", "")
+TRONSCAN_API_KEY = os.getenv("TRONSCAN_API_KEY", "").strip()
+TRONGRID_API_KEY = os.getenv("TRONGRID_API_KEY", "").strip()
 OUTPUT_FILE = "vulnerable_contracts.json"
 CONTRACT_LIMIT = 20  # Number of recent contracts to scan per run
 
 TRONSCAN_LIST_URL = "https://apilist.tronscanapi.com/api/contracts"
 TRONSCAN_DETAIL_URL = "https://apilist.tronscanapi.com/api/contract"
 TRONGRID_BASE = "https://api.trongrid.io"
+
+# Debugging: Print if the key is loaded
+if TRONSCAN_API_KEY:
+    print("✅ TRONSCAN_API_KEY is loaded successfully.")
+else:
+    print("❌ WARNING: TRONSCAN_API_KEY is missing or empty! You will likely get a 401 Unauthorized error.")
+
+# Build Headers properly (No overwriting)
 HEADERS = {}
-if TRONSCAN_API_KEY: HEADERS["TRON-PRO-API-KEY"] = TRONSCAN_API_KEY
-if TRONGRID_API_KEY: HEADERS["TRON-PRO-API-KEY"] = TRONGRID_API_KEY
+if TRONSCAN_API_KEY: 
+    HEADERS["TRON-PRO-API-KEY"] = TRONSCAN_API_KEY
 
 client = Tron(network="mainnet")
 
@@ -100,6 +108,10 @@ def main():
     except FileNotFoundError: pass
 
     contracts = fetch_recent_contracts()
+
+    if len(contracts) == 0:
+        print("⚠️ No contracts to analyze. Check your API key or rate limits.")
+        return
 
     for i, c in enumerate(contracts):
         address = c.get("address")
