@@ -1,0 +1,37 @@
+name: TRON Mythril Batch Scanner
+
+on:
+  workflow_dispatch:  # Allows manual trigger
+  schedule:
+    - cron: '0 */6 * * *' # Runs every 6 hours
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          # Install Mythril (using Docker is also an option, but pip is simpler here)
+          pip install mythril
+
+      - name: Run Mythril Scanner
+        env:
+          TRONSCAN_API_KEY: ${{ secrets.TRONSCAN_API_KEY }}
+          TRONGRID_API_KEY: ${{ secrets.TRONGRID_API_KEY }}
+        run: python mythril_scanner.py
+
+      - name: Commit and Push Results
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Update vulnerable contracts list"
+          file_pattern: vulnerable_contracts.json
